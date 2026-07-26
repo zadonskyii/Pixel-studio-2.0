@@ -1,1187 +1,1195 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>🎨 Tank Pixel Studio — Fullscreen + Hotkeys</title>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+<title>Pixel Studio — pixel art + 3D preview</title>
+
+<!--
+  PIXEL STUDIO — single-file prototype
+  =====================================
+  HOW TO RUN
+    Just open this file in a modern desktop or mobile browser (Chrome, Edge,
+    Firefox, Safari). No build step, no server, no npm install. All
+    dependencies (Three.js, OrbitControls, zip.js) load from public CDNs via
+    an import map, so an internet connection is required the first time to
+    fetch them; the editor itself never makes any other network call.
+
+  KEY FEATURES
+    - Grid-based pixel canvas (16x16 / 32x32 / 64x64), pixel-perfect (no
+      antialiasing), brush / eraser / fill tools, adjustable brush size.
+    - Two-layer-minimum layer stack: add/remove/reorder layers, per-layer
+      opacity and visibility.
+    - Minecraft-flavored default palette, custom color picker, and palette
+      extraction from an imported PNG.
+    - Undo/redo (10 steps) via layer-snapshot stack.
+    - Live 3D preview (Three.js): a lit texture plane, or a "voxelized"
+      mode where every opaque pixel becomes a cube, with per-color height
+      variation and orbit camera controls.
+    - Export: PNG download, a Bedrock-style item_texture.json + manifest.json
+      stub, "Copy JSON" for pasting straight into a Blockbench/mod project,
+      and an optional all-in-one .zip (via zip.js, loaded on demand).
+
+  LIMITATIONS
+    - Changing resolution clears the canvas (pixel art doesn't resize well
+      automatically) — you'll be asked to confirm first.
+    - The manifest.json produced is a minimal starting point, not a
+      complete valid .mcaddon; you still need to zip it correctly with your
+      full resource pack structure for Bedrock to load it.
+    - Voxel mode height-by-color is a simple heuristic (order of first
+      appearance), not a semantic material system.
+    - ZIP export requires the zip.js CDN module to load; if you're offline
+      you can still use "Export PNG" and "Copy JSON" separately.
+
+  BLOCKBENCH / .mcaddon TIPS
+    - Draw your item/block texture here at the resolution Bedrock expects
+      (16x16 for most items/blocks), export the PNG, and drop it straight
+      into your resource pack's textures/items or textures/blocks folder.
+    - Use "Copy JSON" to grab the item_texture.json snippet and merge its
+      "texture_data" entry into your pack's existing textures/item_texture.json
+      rather than overwriting the whole file.
+    - The voxel preview is a fast way to sanity-check silhouette and color
+      separation before you commit to modeling the real geometry in
+      Blockbench — it is not a substitute for an actual Bedrock model.
+-->
+
 <style>
-  :root {
-    --bg: #0f1622; --panel: #1a2535; --panel2:#22324a;
-    --line:#2e425e; --accent:#4dd0ff; --txt:#e8eef5; --mut:#8aa0b4;
+  :root{
+    --bg-0:#0d0f12;
+    --bg-1:#15181d;
+    --bg-2:#1c2027;
+    --bg-3:#262b34;
+    --line:#31374133;
+    --line-strong:#3a4150;
+    --text-0:#e9edf3;
+    --text-1:#a4adba;
+    --text-2:#707a89;
+    --accent:#5ad1c4;
+    --accent-2:#9b8cff;
+    --danger:#e2685b;
+    --radius:8px;
+    font-size:15px;
   }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    background: var(--bg);
-    color: var(--txt);
-    overflow: hidden;
-    font-family: "Segoe UI", system-ui, sans-serif;
+  *{ box-sizing:border-box; }
+  html,body{
+    margin:0; padding:0; width:100%; height:100%;
+    background:var(--bg-0); color:var(--text-0);
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    overflow:hidden;
   }
-
-  .layout {
-    display: grid;
-    grid-template-columns: 260px 1fr;
-    height: 100vh;
-    width: 100vw;
+  button{
+    font-family:inherit; font-size:13px; color:var(--text-0);
+    background:var(--bg-3); border:1px solid var(--line-strong);
+    border-radius:6px; padding:6px 10px; cursor:pointer;
+    display:inline-flex; align-items:center; gap:6px;
+    transition:background .12s ease, border-color .12s ease;
   }
-  .sidebar {
-    background: var(--panel);
-    border-right: 1px solid var(--line);
-    padding: 14px;
-    overflow-y: auto;
-    min-height: 0;
+  button:hover{ background:#323844; border-color:var(--accent); }
+  button:active{ transform:translateY(1px); }
+  button.active{ background:var(--accent); color:#04201c; border-color:var(--accent); font-weight:600; }
+  button:disabled{ opacity:.35; cursor:not-allowed; }
+  button.danger:hover{ border-color:var(--danger); }
+  input[type="range"]{ width:100%; accent-color:var(--accent); }
+  input[type="color"]{
+    width:34px; height:28px; padding:0; border:1px solid var(--line-strong);
+    border-radius:6px; background:none; cursor:pointer;
   }
-  #stage-container {
-    position: relative;
-    background: conic-gradient(#1d2738 0 25%, #25324a 0 50%) 0 0/24px 24px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 100%;
-    height: 100%;
+  input[type="text"], select{
+    font-family:inherit; font-size:13px; color:var(--text-0);
+    background:var(--bg-2); border:1px solid var(--line-strong);
+    border-radius:6px; padding:5px 8px;
   }
-  #stage {
-    image-rendering: pixelated;
-    outline: none;
-    cursor: crosshair;
-    max-width: 100%;
-    max-height: 100%;
-    box-shadow: 0 0 30px rgba(0,0,0,.5);
-  }
-  .zoom-controls {
-    position: absolute;
-    top: 12px; right: 12px;
-    display:flex; gap:6px;
-  }
-  .btn-zoom {
-    width: 36px; height: 36px; border-radius: 8px;
-    border: none; background: rgba(0,0,0,.7); color: #fff;
-    font-weight: bold; font-size: 1.2rem; cursor: pointer;
-  }
-
-  h3 { font-size:.78rem; text-transform:uppercase; letter-spacing:1px; color:var(--mut); margin-bottom:10px;}
-  .tools { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
-  .tool {
-    background: var(--panel2); border:1px solid var(--line); border-radius:10px;
-    padding:10px 4px; font-size:1.2rem; cursor:pointer; transition:.15s;
-    display:flex; flex-direction:column; align-items:center; gap:3px;
-  }
-  .tool small{ font-size:.6rem; color:var(--mut); }
-  .tool:hover{ border-color:var(--accent); transform:translateY(-2px);}
-  .tool.active{ background:linear-gradient(135deg,#2f80ed,#4dd0ff); color:#04111d; border-color:transparent;}
-
-  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
-  .btn {
-    flex:1; min-width:0;
-    padding:9px 8px; border:none; border-radius:10px; cursor:pointer;
-    font-weight:700; font-size:.82rem;
-    background:var(--panel2); color:var(--txt); border:1px solid var(--line);
-    transition:.15s;
-  }
-  .btn:hover{ border-color:var(--accent); }
-  .btn.primary{ background:linear-gradient(135deg,#4dd0ff,#2f80ed); color:#04111d; border:none;}
-  .btn.danger{ background:#3a2230; border-color:#5a2e44; color:#ff9bb3;}
-
-  .palette{ display:grid; grid-template-columns:repeat(8,1fr); gap:5px; }
-  .sw {
-    aspect-ratio:1; border-radius:6px; cursor:pointer; border:2px solid transparent;
-    box-shadow:inset 0 0 0 1px rgba(0,0,0,.4);
-  }
-  .sw.active{ border-color:#fff; transform:scale(1.12); }
-  .sw.eraser{ background: conic-gradient(#888 0 25%,#bbb 0 50%) 0 0/8px 8px; }
-
-  .kit-title { margin-top:18px; color:var(--accent); font-weight:bold; }
-  .kit-btn {
-    border:none; background:var(--panel2); border:1px solid var(--line);
-    padding:8px; border-radius:8px; cursor:pointer; font-size:.75rem;
-    text-align:left; display:flex; align-items:center; gap:6px;
-  }
-  .kit-btn:hover { border-color:var(--accent); background:#2a3b50; }
-
-  /* Компактные «Недавние» цвета — в одну строку, маленькие квадратики */
-  .recent-label {
-    margin-top: 6px;
-    font-size: .7rem;
-    color: var(--mut);
-  }
-  .recent {
-    display: flex;
-    gap: 4px;
-    margin-bottom: 12px;
-  }
-  .recent .sw {
-    width: 20px; height: 20px; /* маленькие квадраты */
-    border-radius: 4px;
-    border-width: 1px;
+  label.field{ display:flex; flex-direction:column; gap:4px; font-size:11px; color:var(--text-1); text-transform:uppercase; letter-spacing:.04em; }
+  hr.sep{ border:none; border-top:1px solid var(--line); margin:12px 0; }
+  h2.panel-title{
+    font-size:11px; text-transform:uppercase; letter-spacing:.08em;
+    color:var(--text-2); margin:0 0 10px 0; font-weight:600;
   }
 
-  @media (max-width:768px) {
-    .layout { grid-template-columns: 1fr; }
-    .sidebar { position:absolute; top:0; left:0; width:260px; height:100vh; z-index:10; }
-    #stage-container { padding: 16px; }
+  /* ---------- app shell ---------- */
+  #app{ display:flex; flex-direction:column; width:100%; height:100%; }
+
+  #toolbar{
+    display:flex; align-items:center; gap:8px; padding:8px 12px;
+    background:var(--bg-1); border-bottom:1px solid var(--line);
+    flex-wrap:wrap; flex-shrink:0;
   }
+  #toolbar .brand{ font-weight:700; font-size:14px; margin-right:10px; color:var(--text-0); }
+  #toolbar .brand em{ color:var(--accent); font-style:normal; }
+  #toolbar .group{ display:flex; align-items:center; gap:6px; padding:0 8px; border-right:1px solid var(--line); }
+  #toolbar .group:last-child{ border-right:none; }
+  #toolbar .spacer{ flex:1 1 auto; }
+
+  #main{ flex:1 1 auto; display:grid; grid-template-columns: 260px 1fr 320px; overflow:hidden; min-height:0; }
+
+  #left-panel, #right-panel{
+    background:var(--bg-1); overflow-y:auto; padding:14px; border-right:1px solid var(--line);
+  }
+  #right-panel{ border-right:none; border-left:1px solid var(--line); }
+
+  #center-panel{
+    display:flex; align-items:center; justify-content:center;
+    background:
+      linear-gradient(45deg, #14161a 25%, transparent 25%),
+      linear-gradient(-45deg, #14161a 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #14161a 75%),
+      linear-gradient(-45deg, transparent 75%, #14161a 75%);
+    background-size:20px 20px; background-position:0 0,0 10px,10px -10px,-10px 0px;
+    background-color:#1a1d22;
+    position:relative; overflow:auto; min-width:0;
+  }
+  #canvas-wrap{ position:relative; box-shadow:0 0 0 1px var(--line-strong), 0 20px 50px rgba(0,0,0,.5); }
+  #view-canvas{
+    image-rendering:pixelated; image-rendering:crisp-edges;
+    display:block; touch-action:none; background:#000;
+    cursor:crosshair;
+  }
+
+  /* palette */
+  #swatches{ display:grid; grid-template-columns:repeat(6,1fr); gap:6px; margin-bottom:10px; }
+  .swatch{
+    width:100%; aspect-ratio:1; border-radius:5px; cursor:pointer;
+    border:2px solid transparent; box-shadow:inset 0 0 0 1px rgba(255,255,255,.08);
+  }
+  .swatch.selected{ border-color:var(--accent); }
+  #current-color-row{ display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+
+  /* layers */
+  #layers-list{ display:flex; flex-direction:column; gap:6px; margin-bottom:8px; }
+  .layer-row{
+    display:flex; align-items:center; gap:6px; padding:6px; border-radius:6px;
+    background:var(--bg-2); border:1px solid var(--line);
+  }
+  .layer-row.active{ border-color:var(--accent); }
+  .layer-row input[type="text"]{ flex:1 1 auto; min-width:0; padding:4px 6px; }
+  .layer-row .mini{ padding:3px 6px; font-size:11px; }
+  .layer-row .opacity{ width:60px; }
+
+  /* 3D panel */
+  #preview3d-canvas{ width:100%; aspect-ratio:1; display:block; border-radius:8px; background:#05070a; touch-action:none; }
+  #preview-modes{ display:flex; gap:6px; margin:10px 0; }
+  #preview-modes button{ flex:1 1 auto; justify-content:center; }
+  #webgl-fallback{ display:none; padding:20px; text-align:center; color:var(--text-1); font-size:13px; }
+
+  /* status bar */
+  #statusbar{
+    display:flex; gap:18px; padding:6px 14px; font-size:11px; color:var(--text-2);
+    background:var(--bg-1); border-top:1px solid var(--line); flex-shrink:0;
+  }
+  #statusbar b{ color:var(--text-1); font-weight:600; }
+  #status-color-dot{ width:11px; height:11px; border-radius:3px; display:inline-block; vertical-align:middle; margin-right:4px; box-shadow:inset 0 0 0 1px rgba(255,255,255,.15); }
+
+  /* mobile / foldable responsiveness */
+  #mobile-3d-toggle{ display:none; }
+  #right-panel-overlay-bg{ display:none; }
+
+  @media (max-width: 880px){
+    #main{ grid-template-columns: 220px 1fr; }
+    #right-panel{
+      position:fixed; top:0; right:0; height:100%; width:min(86vw,360px);
+      transform:translateX(100%); transition:transform .22s ease; z-index:30;
+      box-shadow:-10px 0 30px rgba(0,0,0,.5);
+    }
+    #right-panel.open{ transform:translateX(0); }
+    #mobile-3d-toggle{ display:inline-flex; }
+    #right-panel-overlay-bg.open{
+      display:block; position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:20;
+    }
+  }
+  @media (max-width: 620px){
+    #main{ grid-template-columns: 1fr; }
+    #left-panel{
+      position:fixed; top:0; left:0; height:100%; width:min(80vw,300px);
+      transform:translateX(-100%); transition:transform .22s ease; z-index:30;
+      box-shadow:10px 0 30px rgba(0,0,0,.5);
+    }
+    #left-panel.open{ transform:translateX(0); }
+    #mobile-tools-toggle{ display:inline-flex !important; }
+    #statusbar{ flex-wrap:wrap; gap:8px 16px; }
+  }
+  #mobile-tools-toggle{ display:none; }
+
+  .visually-hidden{ position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
 </style>
 </head>
 <body>
 
-<div class="layout">
-  <div class="sidebar">
-    <h3>🛠️ Инструменты</h3>
-    <div class="tools">
-      <div class="tool active" data-tool="pencil">✏️<small>Кисть</small></div>
-      <div class="tool" data-tool="eraser">🧽<small>Ластик</small></div>
-      <div class="tool" data-tool="fill">🪣<small>Заливка</small></div>
-      <div class="tool" data-tool="line">📏<small>Линия</small></div>
-      <div class="tool" data-tool="rect">▭<small>Прямоуг.</small></div>
-      <div class="tool" data-tool="square">□<small>Квадрат</small></div>
-      <div class="tool" data-tool="circle">●<small>Круг</small></div>
-      <div class="tool" data-tool="picker">💧<small>Пипетка</small></div>
-      <!-- ДОБАВЛЕНО: Штамп -->
-      <div class="tool" data-tool="stamp">🖨️<small>Штамп</small></div>
+<div id="app">
+
+  <!-- ===================== TOOLBAR ===================== -->
+  <header id="toolbar">
+    <button id="mobile-tools-toggle" title="Toggle tools panel">☰</button>
+    <span class="brand">Pixel <em>Studio</em></span>
+
+    <div class="group" role="group" aria-label="Drawing tools">
+      <button data-tool="brush" class="tool-btn active" title="Brush (B)">✏️ Brush</button>
+      <button data-tool="eraser" class="tool-btn" title="Eraser (E)">🩹 Eraser</button>
+      <button data-tool="fill" class="tool-btn" title="Fill (F)">🪣 Fill</button>
     </div>
 
-    <h3 style="margin-top:16px;">⚙️ Параметры</h3>
-    <div style="margin-bottom:8px;">
-      <label style="font-size:.78rem; color:var(--mut); display:block; margin-bottom:4px;">Размер холста</label>
-      <select id="sizeSel" style="width:100%; padding:6px; background:var(--panel2); color:var(--txt); border:1px solid var(--line); border-radius:8px;">
-        <option value="16">16 × 16</option>
-        <option value="24" selected>24 × 24</option>
-        <option value="32">32 × 32</option>
-        <option value="48">48 × 48</option>
-        <option value="64">64 × 64</option>
-      </select>
-    </div>
-    <div style="margin-bottom:8px;">
-      <label style="font-size:.78rem; color:var(--mut); display:block; margin-bottom:4px;">Толщина</label>
-      <input type="range" id="thickness" min="1" max="8" value="1" style="width:100%;">
-      <div style="text-align:right; color:var(--mut); font-size:.7rem;"><span id="thicknessVal">1</span> px</div>
-    </div>
-    <label style="display:flex; align-items:center; gap:8px; font-size:.85rem; cursor:pointer; margin-bottom:6px;">
-      <input type="checkbox" id="mirror" checked style="width:18px; height:18px; accent-color:var(--accent);">
-      🪞 Зеркальная симметрия
-    </label>
-    <label style="display:flex; align-items:center; gap:8px; font-size:.85rem; cursor:pointer; margin-bottom:12px;">
-      <input type="checkbox" id="gridToggle" checked style="width:18px; height:18px; accent-color:var(--accent);">
-      # Показывать сетку
-    </label>
-
-    <!-- ДОБАВЛЕНО: Режим 1:1 -->
-    <label style="display:flex; align-items:center; gap:8px; font-size:.85rem; cursor:pointer; margin-bottom:12px;">
-      <input type="checkbox" id="pixelPerfect" style="width:18px; height:18px; accent-color:var(--accent);">
-      🖥️ Режим 1:1 (без масштабирования)
-    </label>
-
-    <div class="row" style="margin-top:8px;">
-      <button class="btn" id="undoBtn">↩️ Отмена</button>
-      <button class="btn" id="redoBtn">↪️ Повтор</button>
+    <div class="group">
+      <label class="field" style="text-transform:none;letter-spacing:0;">
+        Brush size
+        <input id="brush-size" type="range" min="1" max="8" value="1" title="Brush size" style="width:90px;" />
+      </label>
     </div>
 
-    <div style="margin-top:12px; font-size:.72rem; color:var(--mut); line-height:1.4;">
-      Горячие клавиши:<br>
-      B кисть • E ластик • G заливка<br>
-      L линия • R прямоугольник • Q квадрат • C круг • I пипетка<br>
-      Z отмена • Y повтор<br>
-      + / − зум • Ctrl+↑/↓ толщина
+    <div class="group">
+      <button id="undo-btn" title="Undo (Ctrl+Z)">↶ Undo</button>
+      <button id="redo-btn" title="Redo (Ctrl+Shift+Z)">↷ Redo</button>
     </div>
 
-    <h3 class="kit-title">🔧 Мини-конструктор</h3>
-    <p style="font-size:.7rem; color:var(--mut); margin-bottom:6px;">Нарисуй деталь на холсте</p>
-    <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px;">
-      <button class="kit-btn" onclick="drawPart('body')">🟫 Корпус</button>
-      <button class="kit-btn" onclick="drawPart('turret')">🟦 Башня</button>
-      <button class="kit-btn" onclick="drawPart('gun')">🟧 Пушка</button>
-      <button class="kit-btn" onclick="drawPart('tracks')">🟩 Гусеницы</button>
+    <div class="group">
+      <label class="field" style="text-transform:none;letter-spacing:0;">
+        Resolution
+        <select id="resolution-select" title="Canvas resolution">
+          <option value="16">16 × 16</option>
+          <option value="32" selected>32 × 32</option>
+          <option value="64">64 × 64</option>
+        </select>
+      </label>
     </div>
 
-    <h3 style="margin-top:14px;">🎨 Цвет</h3>
-    <div class="palette" id="palette"></div>
-    <div style="display:flex; align-items:center; gap:8px; margin-top:6px;">
-      <input type="color" id="customColor" value="#3ad07a" style="width:42px; height:34px; border:none; background:none; border-radius:8px; cursor:pointer;">
-      <button class="btn" id="addColor" style="flex:1;">＋ В палитру</button>
+    <div class="spacer"></div>
+
+    <div class="group">
+      <button id="export-png-btn" title="Download PNG">⬇ PNG</button>
+      <button id="copy-json-btn" title="Copy item_texture.json to clipboard">📋 Copy JSON</button>
+      <button id="export-zip-btn" title="Download PNG + JSON as a .zip">📦 Export ZIP</button>
     </div>
 
-    <div class="recent-label">Недавние:</div>
-    <div class="recent" id="recent"></div>
+    <button id="mobile-3d-toggle" title="Toggle 3D preview">🧊</button>
+  </header>
 
-    <!-- ДОБАВЛЕНО: Импорт палитры из PNG -->
-    <div style="margin-top:16px;">
-      <h3 style="font-size:.7rem; color:var(--accent); margin-bottom:6px;">🖼️ Импорт палитры (PNG)</h3>
-      <input type="file" id="paletteFile" accept="image/png,image/jpeg" style="font-size:.75rem; width:100%; margin-bottom:6px;">
-    </div>
+  <!-- ===================== MAIN ===================== -->
+  <div id="main">
 
-    <!-- ДОБАВЛЕНО: Библиотека танков (ручное добавление) -->
-    <div style="margin-top:16px;">
-      <h3 style="font-size:.7rem; color:var(--accent); margin-bottom:6px;">📦 Библиотека танков</h3>
-      <p style="font-size:.65rem; color:var(--mut); margin-bottom:6px;">Ручное добавление JSON (через консоль/файл)</p>
-      <textarea id="tankPresetInput" placeholder="Вставьте JSON пресета танка сюда..." style="width:100%; height:80px; background:#111; color:#fff; border:1px solid #333; border-radius:6px; padding:6px; font-family:monospace; font-size:.7rem;"></textarea>
-      <button class="btn primary" id="loadPresetBtn" style="width:100%; margin-top:4px;">📥 Загрузить пресет</button>
-    </div>
-
-    <!-- ДОБАВЛЕНО: Статистика и прогресс -->
-    <div style="margin-top:16px;">
-      <h3 style="font-size:.7rem; color:var(--accent); margin-bottom:6px;">📊 Статистика</h3>
-      <div style="font-size:.75rem;">
-        Пикселей: <span id="statPixels">0</span><br>
-        Цветов: <span id="statColors">0</span><br>
-        Размер JSON: <span id="statJsonSize">0</span> KB<br>
-        Время сессии: <span id="sessionTime">00:00</span>
+    <!-- LEFT: palette + tools detail -->
+    <aside id="left-panel">
+      <h2 class="panel-title">Color</h2>
+      <div id="current-color-row">
+        <input id="color-picker" type="color" value="#5ad1c4" title="Custom color" />
+        <input id="hex-input" type="text" value="#5AD1C4" maxlength="7" title="Hex value" style="width:90px;" />
       </div>
-    </div>
+      <div id="swatches"></div>
+      <label for="palette-import" class="field" style="cursor:pointer;">
+        <button type="button" id="palette-import-btn">🖼️ Import palette from PNG</button>
+      </label>
+      <input id="palette-import" type="file" accept="image/png,image/*" class="visually-hidden" />
 
-    <!-- ДОБАВЛЕНО: Слои -->
-    <div style="margin-top:16px;">
-      <h3 style="font-size:.7rem; color:var(--accent); margin-bottom:6px;">🎛️ Слои</h3>
-      <div id="layersList" style="font-size:.75rem; max-height:120px; overflow-y:auto; border:1px solid var(--line); padding:4px; border-radius:4px; margin-bottom:6px;"></div>
-      <button class="btn" id="newLayerBtn" style="width:100%;">➕ Новый слой</button>
-      <button class="btn danger" id="deleteLayerBtn" style="width:100%; margin-top:4px;">🗑️ Удалить активный</button>
-    </div>
+      <hr class="sep" />
+      <h2 class="panel-title">Layers</h2>
+      <div id="layers-list"></div>
+      <button id="add-layer-btn" style="width:100%; justify-content:center;">+ Add layer</button>
 
-    <div style="margin-top:20px;">
-      <button class="btn primary" id="exportBtn">💾 PNG</button>
-      <button class="btn primary" id="exportJsonBtn" style="width:auto;">📄 JSON</button>
-      <button class="btn" id="saveBtn">📥 Сохранить</button>
-      <button class="btn" id="loadBtn">📤 Загрузить</button>
-      <button class="btn danger" id="clearBtn">🗑️ Очистить</button>
-      <button class="btn primary" id="fullscreenBtn" style="margin-top:8px; width:100%;">🖥️ Полноэкранный холст</button>
-    </div>
+      <hr class="sep" />
+      <p style="font-size:11px; color:var(--text-2); line-height:1.6;">
+        <b style="color:var(--text-1);">Shortcuts</b><br/>
+        B / E / F — brush, eraser, fill<br/>
+        Ctrl+Z — undo · Ctrl+Shift+Z — redo
+      </p>
+    </aside>
+
+    <!-- CENTER: pixel canvas -->
+    <main id="center-panel">
+      <div id="canvas-wrap">
+        <canvas id="view-canvas" width="32" height="32"></canvas>
+      </div>
+    </main>
+
+    <!-- RIGHT: 3D preview -->
+    <div id="right-panel-overlay-bg"></div>
+    <aside id="right-panel">
+      <h2 class="panel-title">3D Preview</h2>
+      <canvas id="preview3d-canvas"></canvas>
+      <div id="webgl-fallback">
+        Your browser or device doesn't support WebGL, so the 3D preview is unavailable.
+        The 2D editor and export tools still work normally.
+      </div>
+      <div id="preview-modes">
+        <button id="mode-plane-btn" class="active" title="Show as a lit texture plane">▭ Texture plane</button>
+        <button id="mode-voxel-btn" title="Show as voxel cubes">🧱 Voxelized</button>
+      </div>
+      <button id="export-gltf-btn" style="width:100%; justify-content:center; margin-bottom:10px;" title="Download the voxelized model as a .glb file">⬇ Export voxel GLTF</button>
+      <p style="font-size:11px; color:var(--text-2); line-height:1.6;">
+        Drag to orbit, scroll/pinch to zoom. Voxel height varies slightly by
+        color, so you can sanity-check color separation before modeling the
+        real block in Blockbench. "Export voxel GLTF" saves the current
+        voxelized pixel art as a .glb you can drag straight into Blockbench,
+        Blender, or any glTF-compatible viewer.
+      </p>
+    </aside>
+
   </div>
 
-  <div id="stage-container">
-    <canvas id="stage" width="480" height="480" tabindex="0"></canvas>
-    <div class="zoom-controls">
-      <button class="btn-zoom" id="zoomIn">+</button>
-      <button class="btn-zoom" id="zoomOut">−</button>
-    </div>
-  </div>
+  <!-- ===================== STATUS BAR ===================== -->
+  <footer id="statusbar">
+    <span><b>Res:</b> <span id="status-res">32×32</span></span>
+    <span><b>Tool:</b> <span id="status-tool">Brush</span></span>
+    <span><span id="status-color-dot"></span><b>Color:</b> <span id="status-color">#5AD1C4</span></span>
+    <span><b>Layer:</b> <span id="status-layer">Base</span></span>
+  </footer>
+
 </div>
 
-<script>
-const stage = document.getElementById('stage');
-const sctx = stage.getContext('2d');
-
-const saveBtn = document.getElementById('saveBtn');
-const loadBtn = document.getElementById('loadBtn');
-const clearBtn = document.getElementById('clearBtn');
-const exportBtn = document.getElementById('exportBtn');
-const exportJsonBtn = document.getElementById('exportJsonBtn');
-const undoBtn = document.getElementById('undoBtn');
-const redoBtn = document.getElementById('redoBtn');
-const zoomIn = document.getElementById('zoomIn');
-const zoomOut = document.getElementById('zoomOut');
-const fullscreenBtn = document.getElementById('fullscreenBtn');
-
-const sizeSel = document.getElementById('sizeSel');
-const thicknessEl = document.getElementById('thickness');
-const thicknessValEl = document.getElementById('thicknessVal');
-const mirrorCheck = document.getElementById('mirror');
-const gridToggle = document.getElementById('gridToggle');
-const pixelPerfectCheck = document.getElementById('pixelPerfect');
-const paletteEl = document.getElementById('palette');
-const recentEl = document.getElementById('recent');
-const customColorEl = document.getElementById('customColor');
-const addColorBtn = document.getElementById('addColor');
-const paletteFile = document.getElementById('paletteFile');
-const tankPresetInput = document.getElementById('tankPresetInput');
-const loadPresetBtn = document.getElementById('loadPresetBtn');
-const statPixelsEl = document.getElementById('statPixels');
-const statColorsEl = document.getElementById('statColors');
-const statJsonSizeEl = document.getElementById('statJsonSize');
-const sessionTimeEl = document.getElementById('sessionTime');
-const layersList = document.getElementById('layersList');
-const newLayerBtn = document.getElementById('newLayerBtn');
-const deleteLayerBtn = document.getElementById('deleteLayerBtn');
-
-let GRID = 24;
-const STAGE_PX = 480;
-let cell = STAGE_PX / GRID;
-let pixels = new Array(GRID * GRID).fill(null);
-let undoStack = [];
-let redoStack = [];
-let zoom = 1;
-const zoomMax = 4;
-const zoomMin = 0.25;
-let thickness = 1;
-let tool = 'pencil';
-let curColor = '#3ad07a';
-let mirror = true;
-let showGrid = true;
-let pixelPerfect = false;
-
-let drawing = false;
-let startCell = null;
-let snapshot = null;
-
-// Слои (упрощённо: храним массив состояний пикселей по слоям)
-let layers = [{ name: 'Слой 1', data: new Array(GRID * GRID).fill(null), active: true }];
-let activeLayerIndex = 0;
-
-function init() {
-  newCanvas(GRID);
-  buildPalette();
-  stage.focus();
-  setupHotkeys();
-  setupFullscreen();
-  updateStats();
-  startSessionTimer();
-  renderLayersList();
-}
-
-function newCanvas(size) {
-  GRID = size;
-  cell = STAGE_PX / GRID;
-  // Пересоздаём слои с новым размером
-  layers = layers.map(l => ({
-    ...l,
-    data: new Array(GRID * GRID).fill(l.active ? null : undefined)
-  }));
-  if (layers.length === 0) {
-    layers = [{ name: 'Слой 1', data: new Array(GRID * GRID).fill(null), active: true }];
-    activeLayerIndex = 0;
-  }
-  undoStack = [];
-  redoStack = [];
-  zoom = 1;
-  applyZoom();
-  redraw();
-  updateStats();
-}
-
-// --- Полноэкранный режим ---
-function setupFullscreen() {
-  const toggle = () => {
-    if (!document.fullscreenElement) {
-      stage.parentElement.requestFullscreen().catch(err => {
-        console.error('Fullscreen error:', err.message);
-      });
-    } else {
-      document.exitFullscreen();
-    }
-  };
-
-  fullscreenBtn.onclick = toggle;
-
-  document.addEventListener('keydown', (e) => {
-    if (e.key.toLowerCase() === 'f' && e.ctrlKey && !e.shiftKey && !e.altKey) {
-      e.preventDefault();
-      toggle();
-    }
-  });
-
-  document.addEventListener('fullscreenchange', () => {
-    fullscreenBtn.textContent = document.fullscreenElement
-      ? '🖥️ Выход из полноэкранного'
-      : '🖥️ Полноэкранный холст';
-  });
-}
-
-// --- Горячие клавиши ---
-function setupHotkeys() {
-  window.addEventListener('keydown', (e) => {
-    if (!stage.matches(':focus') || ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) {
-      return;
-    }
-    const key = e.key.toLowerCase();
-
-    // Отмена / Повтор
-    if (key === 'z' && !e.ctrlKey && !e.shiftKey) undo();
-    if ((key === 'y' || (e.shiftKey && key === 'z')) && !e.ctrlKey) redo();
-
-    // Инструменты
-    if (key === 'b') setTool('pencil');
-    if (key === 'e') setTool('eraser');
-    if (key === 'g') setTool('fill');
-    if (key === 'l') setTool('line');
-    if (key === 'r') setTool('rect');
-    if (key === 'q') setTool('square');
-    if (key === 'c') setTool('circle');
-    if (key === 'i') setTool('picker');
-    if (key === 's') setTool('stamp'); // Штамп
-
-    // Зум
-    if (key === '=' || key === '+') {
-      e.preventDefault();
-      if (zoom < zoomMax) { zoom += 0.25; applyZoom(); }
-    }
-    if (key === '-') {
-      e.preventDefault();
-      if (zoom > zoomMin) { zoom -= 0.25; applyZoom(); }
-    }
-
-    // Толщина (Ctrl + стрелки)
-    if (e.ctrlKey && key === 'arrowup') changeThickness(1);
-    if (e.ctrlKey && key === 'arrowdown') changeThickness(-1);
-
-    // Слои: Ctrl+[ / Ctrl+]
-    if (e.ctrlKey && key === 'bracketleft') changeLayer(-1);
-    if (e.ctrlKey && key === 'bracketright') changeLayer(1);
-  });
-}
-
-function changeLayer(delta) {
-  const n = layers.length;
-  if (n <= 1) return;
-  let next = activeLayerIndex + delta;
-  if (next < 0) next = n - 1;
-  if (next >= n) next = 0;
-  activeLayerIndex = next;
-  layers.forEach((l, i) => l.active = (i === activeLayerIndex));
-  renderLayersList();
-  redraw();
-}
-
-function changeThickness(delta) {
-  let newT = thickness + delta;
-  if (newT < 1) newT = 1;
-  if (newT > 8) newT = 8;
-  thickness = newT;
-  thicknessEl.value = newT;
-  thicknessValEl.textContent = newT;
-}
-
-// --- Зум (CSS transform) ---
-function applyZoom() {
-  if (pixelPerfect) {
-    stage.style.transform = 'none';
-    stage.style.width = `${STAGE_PX}px`;
-    stage.style.height = `${STAGE_PX}px`;
-  } else {
-    stage.style.transform = `scale(${zoom})`;
-    stage.style.transformOrigin = 'center center';
-    stage.style.width = 'auto';
-    stage.style.height = 'auto';
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
   }
 }
+</script>
 
-pixelPerfectCheck.onchange = (e) => {
-  pixelPerfect = e.target.checked;
-  applyZoom();
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { GLTFExporter } from "three/addons/exporters/GLTFExporter.js";
+
+/* =========================================================================
+   STATE
+   Central, mutable app state. Everything else in this file reads/writes
+   through this object so there is a single source of truth to snapshot
+   for undo/redo and to sync into the 3D preview.
+   ========================================================================= */
+const state = {
+  resolution: 32,
+  tool: "brush",
+  brushSize: 1,
+  color: "#5AD1C4",
+  layers: [],        // { name, canvas, ctx, opacity, visible }
+  activeLayerIndex: 0,
+  undoStack: [],      // { layerIndex, imageData }
+  redoStack: [],
+  drawing: false,
+  lastPixel: null,
+  palette: [],
 };
 
-zoomIn.onclick = () => { if (zoom < zoomMax) { zoom += 0.25; applyZoom(); } };
-zoomOut.onclick = () => { if (zoom > zoomMin) { zoom -= 0.25; applyZoom(); } };
+const MAX_UNDO = 10;
 
-stage.addEventListener('wheel', (e) => {
-  e.preventDefault();
-  const delta = e.deltaY > 0 ? -1 : 1;
-  let newZoom = zoom + delta * 0.1;
-  if (newZoom >= zoomMin && newZoom <= zoomMax) {
-    zoom = newZoom;
-    applyZoom();
-  }
-}, { passive: false });
-
-// --- Палитра и недавние цвета ---
-const defaultPalette = [
-  '#3ad07a', '#2f80ed', '#4dd0ff', '#f7c797', '#e5c07b',
-  '#c0392b', '#8e44ad', '#95a5a6', '#34495e', '#2c3e50',
-  null // ластик
+const DEFAULT_PALETTE = [
+  "#7CBD6B","#6B4A2B","#8A8A8A","#3C3C3C","#4A90D9","#DE5D3A",
+  "#FFD54A","#B0B0B0","#6FD1C5","#2E4FA3","#3D9140","#1B1B1B",
+  "#8B5A2B","#C2B280","#4E3629","#E0E0E0","#556B2F","#A83232",
+  "#D9D9D9","#202020",
 ];
 
-let recentColors = [];
-
-function buildPalette() {
-  paletteEl.innerHTML = '';
-  defaultPalette.forEach(c => {
-    const d = document.createElement('div');
-    d.className = 'sw' + (c === null ? ' eraser' : '') + (c === curColor && tool !== 'eraser' ? ' active' : '');
-    if (c !== null) d.style.background = c;
-    d.title = c === null ? 'Ластик' : c;
-    d.onclick = (evt) => {
-      evt.stopPropagation();
-      if (c === null) {
-        setTool('eraser');
-      } else {
-        curColor = c;
-      }
-      refreshSwatches();
-    };
-    paletteEl.appendChild(d);
-  });
-  buildRecent();
+/* =========================================================================
+   LAYER MANAGEMENT
+   Each layer owns its own off-DOM canvas at native pixel resolution
+   (no scaling). Compositing happens on demand into the visible view
+   canvas and into an export canvas.
+   ========================================================================= */
+function createLayer(name) {
+  const canvas = document.createElement("canvas");
+  canvas.width = state.resolution;
+  canvas.height = state.resolution;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.imageSmoothingEnabled = false;
+  return { name, canvas, ctx, opacity: 1, visible: true };
 }
 
-function refreshSwatches() {
-  [...paletteEl.children].forEach((d, i) => {
-    const isActive = defaultPalette[i] === curColor && tool !== 'eraser';
-    d.classList.toggle('active', isActive);
-  });
-  buildRecent();
+function initLayers() {
+  state.layers = [createLayer("Base"), createLayer("Overlay")];
+  state.activeLayerIndex = 0;
+  state.undoStack = [];
+  state.redoStack = [];
+  renderLayersUI();
 }
 
-function buildRecent() {
-  recentEl.innerHTML = '';
-  recentColors.slice(0, 8).forEach(c => {
-    const d = document.createElement('div');
-    d.className = 'sw';
-    d.style.background = c;
-    d.title = c;
-    d.onclick = (evt) => {
-      evt.stopPropagation();
-      curColor = c;
-      refreshSwatches();
-    };
-    recentEl.appendChild(d);
-  });
+function activeLayer() { return state.layers[state.activeLayerIndex]; }
+
+/* =========================================================================
+   VIEW CANVAS / RENDERING
+   The view canvas is kept at native resolution and scaled up purely via
+   CSS (image-rendering: pixelated) so pixels stay crisp without us having
+   to hand-roll nearest-neighbor scaling in JS.
+   ========================================================================= */
+const viewCanvas = document.getElementById("view-canvas");
+const viewCtx = viewCanvas.getContext("2d");
+viewCtx.imageSmoothingEnabled = false;
+
+function resizeViewCanvas() {
+  viewCanvas.width = state.resolution;
+  viewCanvas.height = state.resolution;
+  const displaySize = Math.min(560, Math.floor(window.innerHeight * 0.72));
+  viewCanvas.style.width = displaySize + "px";
+  viewCanvas.style.height = displaySize + "px";
 }
 
-function pushRecent(c) {
-  if (!c) return;
-  recentColors = [c, ...recentColors.filter(x => x !== c)].slice(0, 8);
-  buildRecent();
-}
-
-addColorBtn.onclick = () => {
-  const c = customColorEl.value;
-  if (!defaultPalette.includes(c)) {
-    defaultPalette.push(c);
+/** Composite all visible layers (bottom-to-top) into the given 2D context. */
+function compositeInto(ctx, size) {
+  ctx.clearRect(0, 0, size, size);
+  for (const layer of state.layers) {
+    if (!layer.visible || layer.opacity <= 0) continue;
+    ctx.globalAlpha = layer.opacity;
+    ctx.drawImage(layer.canvas, 0, 0);
   }
-  curColor = c;
-  buildPalette();
-  refreshSwatches();
-};
-
-customColorEl.oninput = (e) => {
-  curColor = e.target.value;
-  refreshSwatches();
-};
-
-// Импорт палитры из файла (простой вариант: берём пиксели из картинки)
-paletteFile.onchange = async (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-  const url = URL.createObjectURL(file);
-  const img = new Image();
-  img.src = url;
-  img.onload = () => {
-    const tempCanvas = document.createElement('canvas');
-    const tCtx = tempCanvas.getContext('2d');
-    tempCanvas.width = img.width;
-    tempCanvas.height = img.height;
-    tCtx.drawImage(img, 0, 0);
-    const imageData = tCtx.getImageData(0, 0, img.width, img.height);
-    const data = imageData.data;
-    const colors = new Set();
-    for (let i = 0; i < data.length; i += 4) {
-      const r = data[i];
-      const g = data[i+1];
-      const b = data[i+2];
-      colors.add(`#${[r,g,b].map(v => v.toString(16).padStart(2,'0')).join('')}`);
-    }
-    defaultPalette.length = 10; // оставляем базовые + ластик
-    colors.forEach(c => defaultPalette.push(c));
-    buildPalette();
-    URL.revokeObjectURL(url);
-  };
-};
-
-// --- Инструменты и переключение ---
-function setTool(t) {
-  tool = t;
-  document.querySelectorAll('.tool').forEach(el =>
-    el.classList.toggle('active', el.dataset.tool === t)
-  );
+  ctx.globalAlpha = 1;
 }
 
-document.querySelectorAll('.tool').forEach(el => {
-  el.onclick = () => {
-    setTool(el.dataset.tool);
-    refreshSwatches();
-  };
-});
-
-mirrorCheck.onchange = (e) => mirror = e.target.checked;
-gridToggle.onchange = (e) => { showGrid = e.target.checked; redraw(); };
-sizeSel.onchange = (e) => newCanvas(+e.target.value);
-thicknessEl.oninput = (e) => {
-  thickness = +e.target.value;
-  thicknessValEl.textContent = thickness;
-};
-
-loadPresetBtn.onclick = () => {
-  try {
-    const preset = JSON.parse(tankPresetInput.value);
-    // Здесь можно реализовать загрузку танка по пресету
-    console.log('Пресет загружен:', preset);
-  } catch (err) {
-    alert('Ошибка JSON в пресете');
-  }
-};
-
-// --- История (Undo/Redo) ---
-function saveState() {
-  const currentLayer = layers[activeLayerIndex];
-  undoStack.push(currentLayer.data.slice());
-  if (undoStack.length > 60) undoStack.shift();
-  redoStack = [];
+function redrawView() {
+  compositeInto(viewCtx, state.resolution);
+  syncThreePreview();
 }
 
-undoBtn.onclick = undo;
-redoBtn.onclick = redo;
+/* =========================================================================
+   UNDO / REDO
+   Snapshot-based: before a stroke starts we push a copy of the active
+   layer's pixel data. Redo stack is cleared whenever a new edit commits.
+   ========================================================================= */
+function snapshotActiveLayer() {
+  const layer = activeLayer();
+  return {
+    layerIndex: state.activeLayerIndex,
+    imageData: layer.ctx.getImageData(0, 0, state.resolution, state.resolution),
+  };
+}
+
+function pushUndoSnapshot(snapshot) {
+  state.undoStack.push(snapshot);
+  if (state.undoStack.length > MAX_UNDO) state.undoStack.shift();
+  state.redoStack = [];
+  updateUndoRedoButtons();
+}
 
 function undo() {
-  if (!undoStack.length) return;
-  redoStack.push(layers[activeLayerIndex].data.slice());
-  layers[activeLayerIndex].data = undoStack.pop();
-  redraw();
-  updateStats();
+  const snap = state.undoStack.pop();
+  if (!snap) return;
+  const layer = state.layers[snap.layerIndex];
+  if (!layer) return;
+  const redoSnap = {
+    layerIndex: snap.layerIndex,
+    imageData: layer.ctx.getImageData(0, 0, state.resolution, state.resolution),
+  };
+  state.redoStack.push(redoSnap);
+  layer.ctx.putImageData(snap.imageData, 0, 0);
+  redrawView();
+  updateUndoRedoButtons();
 }
 
 function redo() {
-  if (!redoStack.length) return;
-  undoStack.push(layers[activeLayerIndex].data.slice());
-  layers[activeLayerIndex].data = redoStack.pop();
-  redraw();
-  updateStats();
+  const snap = state.redoStack.pop();
+  if (!snap) return;
+  const layer = state.layers[snap.layerIndex];
+  if (!layer) return;
+  const undoSnap = {
+    layerIndex: snap.layerIndex,
+    imageData: layer.ctx.getImageData(0, 0, state.resolution, state.resolution),
+  };
+  state.undoStack.push(undoSnap);
+  layer.ctx.putImageData(snap.imageData, 0, 0);
+  redrawView();
+  updateUndoRedoButtons();
 }
 
-// --- Координаты и границы ---
-function getCell(e) {
-  const r = stage.getBoundingClientRect();
-  const clientX = (e.touches ? e.touches[0].clientX : e.clientX);
-  const clientY = (e.touches ? e.touches[0].clientY : e.clientY);
+function updateUndoRedoButtons() {
+  document.getElementById("undo-btn").disabled = state.undoStack.length === 0;
+  document.getElementById("redo-btn").disabled = state.redoStack.length === 0;
+}
 
-  const px = clientX - r.left;
-  const py = clientY - r.top;
-
-  // Учитываем зум для получения координат в «пикселях холста»
-  const scale = pixelPerfect ? 1 : zoom;
-  const x = Math.floor((px / r.width) * GRID);
-  const y = Math.floor((py / r.height) * GRID);
+/* =========================================================================
+   DRAWING TOOLS
+   Brush/eraser paint filled squares of `brushSize` at the pixel under the
+   pointer; fill performs a classic stack-based flood fill on the active
+   layer's ImageData.
+   ========================================================================= */
+function pointerToPixel(evt) {
+  const rect = viewCanvas.getBoundingClientRect();
+  const scaleX = state.resolution / rect.width;
+  const scaleY = state.resolution / rect.height;
+  const x = Math.floor((evt.clientX - rect.left) * scaleX);
+  const y = Math.floor((evt.clientY - rect.top) * scaleY);
   return { x, y };
 }
 
-function idx(x, y) { return y * GRID + x; }
-function inb(x, y) { return x >= 0 && y >= 0 && x < GRID && y < GRID; }
-
-// --- Рисование (основные функции) ---
-function paint(x, y, color) {
-  if (!inb(x, y)) return;
-  const currentLayer = layers[activeLayerIndex];
-  currentLayer.data[idx(x, y)] = color;
-
-  if (mirror && x !== GRID - 1 - x) {
-    const mx = GRID - 1 - x;
-    currentLayer.data[idx(mx, y)] = color;
+function paintAt(x, y) {
+  const layer = activeLayer();
+  const half = Math.floor(state.brushSize / 2);
+  const isEraser = state.tool === "eraser";
+  if (!isEraser) layer.ctx.fillStyle = state.color;
+  for (let dx = -half; dx < state.brushSize - half; dx++) {
+    for (let dy = -half; dy < state.brushSize - half; dy++) {
+      const px = x + dx, py = y + dy;
+      if (px < 0 || py < 0 || px >= state.resolution || py >= state.resolution) continue;
+      if (isEraser) layer.ctx.clearRect(px, py, 1, 1);
+      else layer.ctx.fillRect(px, py, 1, 1);
+    }
   }
 }
 
-function floodFill(x, y, targetColor, replaceColor) {
-  if (!inb(x, y)) return;
-  const currentLayer = layers[activeLayerIndex];
+function floodFill(x, y) {
+  const layer = activeLayer();
+  const size = state.resolution;
+  const imgData = layer.ctx.getImageData(0, 0, size, size);
+  const data = imgData.data;
+
+  const idx = (px, py) => (py * size + px) * 4;
+  const startIdx = idx(x, y);
+  const target = [data[startIdx], data[startIdx + 1], data[startIdx + 2], data[startIdx + 3]];
+
+  const fillColor = hexToRgb(state.color);
+  const fill = [fillColor.r, fillColor.g, fillColor.b, 255];
+
+  const sameColor = (i) =>
+    data[i] === target[0] && data[i + 1] === target[1] &&
+    data[i + 2] === target[2] && data[i + 3] === target[3];
+
+  if (target[0] === fill[0] && target[1] === fill[1] && target[2] === fill[2] && target[3] === fill[3]) return;
+
   const stack = [[x, y]];
+  const visited = new Uint8Array(size * size);
   while (stack.length) {
-    const [cx, cy] = stack.pop();
-    const i = idx(cx, cy);
-    if (!inb(cx, cy) || currentLayer.data[i] !== targetColor) continue;
-    currentLayer.data[i] = replaceColor;
+    const [px, py] = stack.pop();
+    if (px < 0 || py < 0 || px >= size || py >= size) continue;
+    const v = py * size + px;
+    if (visited[v]) continue;
+    const i = idx(px, py);
+    if (!sameColor(i)) continue;
+    visited[v] = 1;
+    data[i] = fill[0]; data[i + 1] = fill[1]; data[i + 2] = fill[2]; data[i + 3] = fill[3];
+    stack.push([px + 1, py], [px - 1, py], [px, py + 1], [px, py - 1]);
+  }
+  layer.ctx.putImageData(imgData, 0, 0);
+}
 
-    if (mirror) {
-      const mx = GRID - 1 - cx;
-      if (      inb(mx, cy) && currentLayer.data[idx(mx, cy)] === targetColor
-      ) {
-        currentLayer.data[idx(mx, cy)] = replaceColor;
-        // Добавляем зеркальную точку в стек, чтобы продолжить заливку симметрично
-        stack.push([mx, cy]);
-      }
+/* pointer event wiring */
+viewCanvas.addEventListener("pointerdown", (evt) => {
+  viewCanvas.setPointerCapture(evt.pointerId);
+  const { x, y } = pointerToPixel(evt);
+  const snapshot = snapshotActiveLayer();
+
+  if (state.tool === "fill") {
+    if (x >= 0 && y >= 0 && x < state.resolution && y < state.resolution) {
+      floodFill(x, y);
+      pushUndoSnapshot(snapshot);
+      redrawView();
     }
-
-    if (inb(cx + 1, cy) && currentLayer.data[idx(cx + 1, cy)] === targetColor) stack.push([cx + 1, cy]);
-    if (inb(cx - 1, cy) && currentLayer.data[idx(cx - 1, cy)] === targetColor) stack.push([cx - 1, cy]);
-    if (inb(cx, cy + 1) && currentLayer.data[idx(cx, cy + 1)] === targetColor) stack.push([cx, cy + 1]);
-    if (inb(cx, cy - 1) && currentLayer.data[idx(cx, cy - 1)] === targetColor) stack.push([cx, cy - 1]);
+    return;
   }
-}
 
-// Вспомогательные для фигур
-function lineCells(x1, y1, x2, y2) {
-  const cells = [];
-  const dx = Math.abs(x2 - x1);
-  const dy = Math.abs(y2 - y1);
-  const sx = x1 < x2 ? 1 : -1;
-  const sy = y1 < y2 ? 1 : -1;
-  let err = dx - dy;
+  state.drawing = true;
+  state._strokeSnapshot = snapshot;
+  state.lastPixel = { x, y };
+  paintAt(x, y);
+  redrawView();
+});
 
-  while (true) {
-    cells.push([x1, y1]);
-    if (x1 === x2 && y1 === y2) break;
-    const e2 = 2 * err;
-    if (e2 > -dy) { err -= dy; x1 += sx; }
-    if (e2 < dx) { err += dx; y1 += sy; }
-  }
-  return cells;
-}
-
-function drawRect(x1, y1, x2, y2, fill) {
-  const minX = Math.min(x1, x2);
-  const maxX = Math.max(x1, x2);
-  const minY = Math.min(y1, y2);
-  const maxY = Math.max(y1, y2);
-
-  for (let y = minY; y <= maxY; y++) {
-    for (let x = minX; x <= maxX; x++) {
-      if (fill || y === minY || y === maxY || x === minX || x === maxX) {
-        paint(x, y, curColor);
-      }
+viewCanvas.addEventListener("pointermove", (evt) => {
+  if (!state.drawing) return;
+  const { x, y } = pointerToPixel(evt);
+  if (state.lastPixel && state.lastPixel.x === x && state.lastPixel.y === y) return;
+  // interpolate between last and current pixel so fast drags don't leave gaps
+  if (state.lastPixel) {
+    const steps = Math.max(Math.abs(x - state.lastPixel.x), Math.abs(y - state.lastPixel.y));
+    for (let s = 1; s <= steps; s++) {
+      const ix = Math.round(state.lastPixel.x + ((x - state.lastPixel.x) * s) / steps);
+      const iy = Math.round(state.lastPixel.y + ((y - state.lastPixel.y) * s) / steps);
+      paintAt(ix, iy);
     }
-  }
-}
-
-function drawCircle(cx, cy, r) {
-  // Алгоритм окружности (Midpoint Circle)
-  let f = 1 - r;
-  let ddF_x = 1;
-  let ddF_y = -2 * r;
-  let x = 0;
-  let y = r;
-
-  const currentLayer = layers[activeLayerIndex];
-
-  const setPixel = (px, py) => {
-    if (!inb(px, py)) return;
-    currentLayer.data[idx(px, py)] = curColor;
-    if (mirror && px !== GRID - 1 - px) {
-      const mx = GRID - 1 - px;
-      currentLayer.data[idx(mx, py)] = curColor;
-    }
-  };
-
-  setPixel(cx, cy + r);
-  setPixel(cx, cy - r);
-  setPixel(cx + r, cy);
-  setPixel(cx - r, cy);
-
-  while (x < y) {
-    if (f >= 0) {
-      y--;
-      ddF_y += 2;
-      f += ddF_y;
-    }
-    x++;
-    ddF_x += 2;
-    f += ddF_x;
-
-    setPixel(cx + x, cy + y);
-    setPixel(cx - x, cy + y);
-    setPixel(cx + x, cy - y);
-    setPixel(cx - x, cy - y);
-    setPixel(cx + y, cy + x);
-    setPixel(cx - y, cy + x);
-    setPixel(cx + y, cy - x);
-    setPixel(cx - y, cy - x);
-  }
-}
-
-// --- Рисование деталей танка (конструктор) ---
-function drawPart(part) {
-  saveState();
-  const currentLayer = layers[activeLayerIndex];
-  const center = Math.floor(GRID / 2);
-
-  switch (part) {
-    case 'body':
-      // Корпус: прямоугольник с закруглёнными краями (упрощённо)
-      for (let y = center - 3; y <= center + 2; y++) {
-        for (let x = center - 4; x <= center + 4; x++) {
-          if (y === center - 3 && (x === center - 4 || x === center + 4)) continue;
-          paint(x, y, curColor);
-        }
-      }
-      break;
-    case 'turret':
-      // Башня: круг/овал
-      drawCircle(center, center - 2, 3);
-      break;
-    case 'gun':
-      // Пушка: линия от башни
-      const cells = lineCells(center - 1, center - 5, center - 1, center - 9);
-      cells.forEach(([x, y]) => paint(x, y, curColor));
-      break;
-    case 'tracks':
-      // Гусеницы: две линии снизу
-      for (let i = 0; i <= 8; i++) {
-        paint(center - 4 + i, center + 3, curColor); // нижняя
-        paint(center - 4 + i, center + 4, curColor); // вторая линия
-      }
-      break;
-  }
-  redraw();
-  updateStats();
-}
-
-// --- Пипетка ---
-function pickColor(x, y) {
-  const currentLayer = layers[activeLayerIndex];
-  const color = currentLayer.data[idx(x, y)];
-  if (color) {
-    curColor = color;
-    pushRecent(color);
-    refreshSwatches();
-  }
-}
-
-// --- Штамп (упрощённо: копируем небольшой блок) ---
-let stampSource = null;
-function startStamp(x, y) {
-  stampSource = { x, y };
-}
-function applyStamp(tx, ty) {
-  if (!stampSource) return;
-  saveState();
-  const currentLayer = layers[activeLayerIndex];
-  const size = 3;
-  for (let dy = -1; dy <= 1; dy++) {
-    for (let dx = -1; dx <= 1; dx++) {
-      const sx = stampSource.x + dx;
-      const sy = stampSource.y + dy;
-      const tx2 = tx + dx;
-      const ty2 = ty + dy;
-      if (!inb(sx, sy) || !inb(tx2, ty2)) continue;
-      const color = layers[activeLayerIndex].data[idx(sx, sy)];
-      if (color) {
-        currentLayer.data[idx(tx2, ty2)] = color;
-        if (mirror && tx2 !== GRID - 1 - tx2) {
-          const mx = GRID - 1 - tx2;
-          currentLayer.data[idx(mx, ty2)] = color;
-        }
-      }
-    }
-  }
-  redraw();
-  updateStats();
-}
-
-// --- Обработка событий мыши и касаний ---
-function onDown(e) {
-  e.preventDefault();
-  const { x, y } = getCell(e);
-  if (!inb(x, y)) return;
-
-  drawing = true;
-  startCell = { x, y };
-
-  if (tool === 'picker') {
-    pickColor(x, y);
-  } else if (tool === 'stamp') {
-    startStamp(x, y);
   } else {
-    saveState();
-    drawAt(x, y);
+    paintAt(x, y);
+  }
+  state.lastPixel = { x, y };
+  redrawView();
+});
+
+function endStroke() {
+  if (!state.drawing) return;
+  state.drawing = false;
+  state.lastPixel = null;
+  if (state._strokeSnapshot) {
+    pushUndoSnapshot(state._strokeSnapshot);
+    state._strokeSnapshot = null;
+  }
+}
+viewCanvas.addEventListener("pointerup", endStroke);
+viewCanvas.addEventListener("pointercancel", endStroke);
+viewCanvas.addEventListener("pointerleave", () => { if (state.drawing) endStroke(); });
+
+/* =========================================================================
+   PALETTE
+   ========================================================================= */
+function hexToRgb(hex) {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return m ? { r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16) } : { r: 0, g: 0, b: 0 };
+}
+function rgbToHex(r, g, b) {
+  return "#" + [r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("").toUpperCase();
+}
+
+function renderSwatches() {
+  const el = document.getElementById("swatches");
+  el.innerHTML = "";
+  for (const hex of state.palette) {
+    const sw = document.createElement("div");
+    sw.className = "swatch" + (hex.toUpperCase() === state.color.toUpperCase() ? " selected" : "");
+    sw.style.background = hex;
+    sw.title = hex;
+    sw.addEventListener("click", () => setColor(hex));
+    el.appendChild(sw);
   }
 }
 
-function onMove(e) {
-  if (!drawing) return;
-  e.preventDefault();
-  const { x, y } = getCell(e);
-  if (!inb(x, y)) return;
+function setColor(hex) {
+  state.color = hex.toUpperCase();
+  document.getElementById("color-picker").value = state.color;
+  document.getElementById("hex-input").value = state.color;
+  renderSwatches();
+  updateStatusBar();
+}
 
-  drawAt(x, y);
+document.getElementById("color-picker").addEventListener("input", (e) => setColor(e.target.value));
+document.getElementById("hex-input").addEventListener("change", (e) => {
+  const v = e.target.value.trim();
+  if (/^#?[0-9a-fA-F]{6}$/.test(v)) setColor(v.startsWith("#") ? v : "#" + v);
+  else e.target.value = state.color;
+});
 
-  // Рисуем линию между точками при движении
-  if (startCell) {
-    const cells = lineCells(startCell.x, startCell.y, x, y);
-    cells.forEach(([cx, cy]) => drawAt(cx, cy));
-    startCell = { x, y };
+document.getElementById("palette-import-btn").addEventListener("click", () => {
+  document.getElementById("palette-import").click();
+});
+document.getElementById("palette-import").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    const bitmap = await createImageBitmap(file);
+    const tmp = document.createElement("canvas");
+    tmp.width = bitmap.width; tmp.height = bitmap.height;
+    const tctx = tmp.getContext("2d");
+    tctx.drawImage(bitmap, 0, 0);
+    const { data } = tctx.getImageData(0, 0, tmp.width, tmp.height);
+    const seen = new Set();
+    const extracted = [];
+    const step = Math.max(1, Math.floor((tmp.width * tmp.height) / 4000)); // sample for large images
+    for (let i = 0; i < data.length; i += 4 * step) {
+      const a = data[i + 3];
+      if (a < 16) continue;
+      const hex = rgbToHex(data[i], data[i + 1], data[i + 2]);
+      if (!seen.has(hex)) { seen.add(hex); extracted.push(hex); }
+      if (extracted.length >= 32) break;
+    }
+    if (extracted.length) {
+      state.palette = extracted;
+      renderSwatches();
+    }
+  } catch (err) {
+    console.error("Palette import failed:", err);
+    alert("Couldn't read that image for palette extraction.");
+  } finally {
+    e.target.value = "";
+  }
+});
+
+/* =========================================================================
+   LAYERS UI
+   ========================================================================= */
+function renderLayersUI() {
+  const list = document.getElementById("layers-list");
+  list.innerHTML = "";
+  // display topmost layer first, matching visual stacking order
+  for (let i = state.layers.length - 1; i >= 0; i--) {
+    const layer = state.layers[i];
+    const row = document.createElement("div");
+    row.className = "layer-row" + (i === state.activeLayerIndex ? " active" : "");
+
+    const vis = document.createElement("button");
+    vis.className = "mini";
+    vis.textContent = layer.visible ? "👁" : "🚫";
+    vis.title = "Toggle visibility";
+    vis.addEventListener("click", (ev) => { ev.stopPropagation(); layer.visible = !layer.visible; renderLayersUI(); redrawView(); });
+
+    const nameInput = document.createElement("input");
+    nameInput.type = "text";
+    nameInput.value = layer.name;
+    nameInput.addEventListener("change", () => { layer.name = nameInput.value || layer.name; updateStatusBar(); });
+    nameInput.addEventListener("click", (ev) => ev.stopPropagation());
+
+    const opacity = document.createElement("input");
+    opacity.type = "range"; opacity.min = "0"; opacity.max = "1"; opacity.step = "0.05";
+    opacity.className = "opacity"; opacity.value = String(layer.opacity);
+    opacity.title = "Layer opacity";
+    opacity.addEventListener("input", () => { layer.opacity = parseFloat(opacity.value); redrawView(); });
+    opacity.addEventListener("click", (ev) => ev.stopPropagation());
+
+    const upBtn = document.createElement("button");
+    upBtn.className = "mini"; upBtn.textContent = "↑"; upBtn.title = "Move up";
+    upBtn.disabled = i === state.layers.length - 1;
+    upBtn.addEventListener("click", (ev) => { ev.stopPropagation(); moveLayer(i, i + 1); });
+
+    const downBtn = document.createElement("button");
+    downBtn.className = "mini"; downBtn.textContent = "↓"; downBtn.title = "Move down";
+    downBtn.disabled = i === 0;
+    downBtn.addEventListener("click", (ev) => { ev.stopPropagation(); moveLayer(i, i - 1); });
+
+    const delBtn = document.createElement("button");
+    delBtn.className = "mini danger"; delBtn.textContent = "✕"; delBtn.title = "Delete layer";
+    delBtn.disabled = state.layers.length <= 1;
+    delBtn.addEventListener("click", (ev) => { ev.stopPropagation(); deleteLayer(i); });
+
+    row.append(vis, nameInput, opacity, upBtn, downBtn, delBtn);
+    row.addEventListener("click", () => { state.activeLayerIndex = i; renderLayersUI(); updateStatusBar(); });
+    list.appendChild(row);
   }
 }
 
-function onUp(e) {
-  e.preventDefault();
-  drawing = false;
-  startCell = null;
-}
-
-function drawAt(x, y) {
-  const currentLayer = layers[activeLayerIndex];
-  if (tool === 'pencil') {
-    paint(x, y, curColor);
-  } else if (tool === 'eraser') {
-    currentLayer.data[idx(x, y)] = null;
-    if (mirror && x !== GRID - 1 - x) {
-      currentLayer.data[idx(GRID - 1 - x, y)] = null;
-    }
-  } else if (tool === 'fill') {
-    const targetColor = currentLayer.data[idx(x, y)];
-    if (targetColor !== curColor) {
-      floodFill(x, y, targetColor, curColor);
-    }
-  } else if (tool === 'line') {
-    // Линия рисуется в onMove через lineCells, здесь можно ничего не делать
-  } else if (tool === 'rect') {
-    // Прямоугольник: начало в startCell, конец в текущей точке
-    if (startCell) {
-      drawRect(startCell.x, startCell.y, x, y, false);
-    }
-  } else if (tool === 'square') {
-    if (startCell) {
-      const size = Math.max(1, Math.abs(x - startCell.x), Math.abs(y - startCell.y));
-      const cx = startCell.x;
-      const cy = startCell.y;
-      drawRect(cx, cy, cx + size, cy + size, false);
-    }
-  } else if (tool === 'circle') {
-    if (startCell) {
-      const r = Math.max(1, Math.round(Math.hypot(x - startCell.x, y - startCell.y)));
-      drawCircle(startCell.x, startCell.y, r);
-    }
-  } else if (tool === 'stamp' && startCell) {
-    applyStamp(x, y);
-  }
-
-  redraw();
-  updateStats();
-}
-
-stage.addEventListener('mousedown', onDown);
-stage.addEventListener('mousemove', onMove);
-stage.addEventListener('mouseup', onUp);
-stage.addEventListener('touchstart', onDown, { passive: false });
-stage.addEventListener('touchmove', onMove, { passive: false });
-stage.addEventListener('touchend', onUp, { passive: false });
-
-// --- Отрисовка всего холста ---
-function redraw() {
-  sctx.clearRect(0, 0, stage.width, stage.height);
-
-  // Сетка
-  if (showGrid) {
-    sctx.strokeStyle = 'rgba(255,255,255,0.08)';
-    sctx.lineWidth = 1;
-    for (let i = 0; i <= GRID; i++) {
-      const px = i * cell;
-      sctx.beginPath(); sctx.moveTo(px, 0); sctx.lineTo(px, stage.height); sctx.stroke();
-      sctx.beginPath(); sctx.moveTo(0, px); sctx.lineTo(stage.width, px); sctx.stroke();
-    }
-  }
-
-  // Отрисовка всех слоёв (для простоты — только активный слой, но можно расширить)
-  const currentLayer = layers[activeLayerIndex];
-  currentLayer.data.forEach((color, i) => {
-    if (!color) return;
-    const x = i % GRID;
-    const y = Math.floor(i / GRID);
-    sctx.fillStyle = color;
-    sctx.fillRect(x * cell, y * cell, cell, cell);
-  });
-}
-
-// --- Статистика ---
-function updateStats() {
-  const currentLayer = layers[activeLayerIndex];
-  const filled = currentLayer.data.filter(c => c !== null);
-  const uniqueColors = new Set(filled);
-
-  statPixelsEl.textContent = filled.length;
-  statColorsEl.textContent = uniqueColors.size;
-
-  // Примерный размер JSON (упрощённо)
-  const jsonSizeKB = Math.round((JSON.stringify(layers).length / 1024) * 100) / 100;
-  statJsonSizeEl.textContent = jsonSizeKB;
-}
-
-let sessionStartTime = Date.now();
-function startSessionTimer() {
-  const update = () => {
-    const diff = Math.floor((Date.now() - sessionStartTime) / 1000);
-    const m = Math.floor(diff / 60).toString().padStart(2, '0');
-    const s = (diff % 60).toString().padStart(2, '0');
-    sessionTimeEl.textContent = `${m}:${s}`;
-    requestAnimationFrame(update);
-  };
-  update();
-}
-
-// --- Слои: интерфейс ---
-function renderLayersList() {
-  layersList.innerHTML = '';
-  layers.forEach((l, i) => {
-    const div = document.createElement('div');
-    div.style.display = 'flex';
-    div.style.alignItems = 'center';
-    div.style.gap = '6px';
-    div.style.padding = '4px';
-    div.style.cursor = 'pointer';
-    div.style.borderRadius = '4px';
-    div.title = l.name;
-    div.onclick = () => {
-      layers.forEach(li => li.active = false);
-      l.active = true;
-      activeLayerIndex = i;
-      renderLayersList();
-      redraw();
-    };
-    div.style.background = l.active ? 'rgba(77, 208, 255, 0.1)' : 'transparent';
-
-    const name = document.createElement('span');
-    name.textContent = l.name;
-    name.style.fontSize = '0.75rem';
-    name.style.color = l.active ? '#4dd0ff' : '#8aa0b4';
-
-    const del = document.createElement('span');
-    del.textContent = '✕';
-    del.style.fontSize = '0.6rem';
-    del.style.color = '#888';
-    del.style.marginLeft = 'auto';
-    del.style.cursor = 'pointer';
-    del.onclick = (evt) => {
-      evt.stopPropagation();
-      deleteLayer(i);
-    };
-
-    div.appendChild(name);
-    div.appendChild(del);
-    layersList.appendChild(div);
-  });
+function moveLayer(from, to) {
+  if (to < 0 || to >= state.layers.length) return;
+  const [layer] = state.layers.splice(from, 1);
+  state.layers.splice(to, 0, layer);
+  if (state.activeLayerIndex === from) state.activeLayerIndex = to;
+  renderLayersUI();
+  redrawView();
 }
 
 function deleteLayer(index) {
-  if (layers.length <= 1) {
-    alert('Должен остаться хотя бы один слой');
-    return;
-  }
-  layers.splice(index, 1);
-  activeLayerIndex = Math.max(0, Math.min(activeLayerIndex, layers.length - 1));
-  layers[activeLayerIndex].active = true;
-  renderLayersList();
-  redraw();
+  if (state.layers.length <= 1) return;
+  state.layers.splice(index, 1);
+  if (state.activeLayerIndex >= state.layers.length) state.activeLayerIndex = state.layers.length - 1;
+  renderLayersUI();
+  redrawView();
 }
 
-newLayerBtn.onclick = () => {
-  const newIndex = layers.length + 1;
-  layers.push({
-    name: `Слой ${newIndex}`,
-    data: new Array(GRID * GRID).fill(null),
-    active: true
+document.getElementById("add-layer-btn").addEventListener("click", () => {
+  state.layers.push(createLayer("Layer " + (state.layers.length + 1)));
+  state.activeLayerIndex = state.layers.length - 1;
+  renderLayersUI();
+  redrawView();
+});
+
+/* =========================================================================
+   TOOLBAR WIRING
+   ========================================================================= */
+document.querySelectorAll(".tool-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    state.tool = btn.dataset.tool;
+    document.querySelectorAll(".tool-btn").forEach((b) => b.classList.toggle("active", b === btn));
+    updateStatusBar();
   });
-  layers.forEach((l, i) => l.active = (i === layers.length - 1));
-  activeLayerIndex = layers.length - 1;
-  renderLayersList();
-  redraw();
-};
+});
 
-deleteLayerBtn.onclick = () => {
-  deleteLayer(activeLayerIndex);
-};
+document.getElementById("brush-size").addEventListener("input", (e) => {
+  state.brushSize = parseInt(e.target.value, 10);
+});
 
-// --- Экспорт / Импорт ---
-exportBtn.onclick = () => {
-  const link = document.createElement('a');
-  link.download = 'tank-pixel.png';
-  link.href = stage.toDataURL('image/png');
-  link.click();
-};
+document.getElementById("undo-btn").addEventListener("click", undo);
+document.getElementById("redo-btn").addEventListener("click", redo);
 
-exportJsonBtn.onclick = () => {
-  const blob = new Blob([JSON.stringify(layers, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'tank-layers.json';
-  a.click();
-  URL.revokeObjectURL(url);
-};
+document.getElementById("resolution-select").addEventListener("change", (e) => {
+  const next = parseInt(e.target.value, 10);
+  if (next === state.resolution) return;
+  const ok = confirm("Changing resolution clears the current canvas. Continue?");
+  if (!ok) { e.target.value = String(state.resolution); return; }
+  state.resolution = next;
+  resizeViewCanvas();
+  initLayers();
+  redrawView();
+  updateStatusBar();
+});
 
-saveBtn.onclick = () => {
-  localStorage.setItem('tank-studio-layers', JSON.stringify(layers));
-  localStorage.setItem('tank-studio-settings', JSON.stringify({
-    GRID,
-    thickness,
-    tool,
-    curColor,
-    mirror,
-    showGrid,
-    pixelPerfect,
-    activeLayerIndex
-  }));
-  alert('Проект сохранён в браузере (localStorage)');
-};
+window.addEventListener("keydown", (e) => {
+  const tag = document.activeElement && document.activeElement.tagName;
+  if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
 
-loadBtn.onclick = () => {
-  const layersStr = localStorage.getItem('tank-studio-layers');
-  const settingsStr = localStorage.getItem('tank-studio-settings');
-  if (!layersStr) {
-    alert('Нет сохранённого проекта');
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+    e.preventDefault();
+    if (e.shiftKey) redo(); else undo();
     return;
   }
+  const map = { b: "brush", e: "eraser", f: "fill" };
+  const tool = map[e.key.toLowerCase()];
+  if (tool) {
+    state.tool = tool;
+    document.querySelectorAll(".tool-btn").forEach((b) => b.classList.toggle("active", b.dataset.tool === tool));
+    updateStatusBar();
+  }
+});
+
+/* mobile panel toggles */
+const leftPanel = document.getElementById("left-panel");
+const rightPanel = document.getElementById("right-panel");
+const overlayBg = document.getElementById("right-panel-overlay-bg");
+document.getElementById("mobile-tools-toggle").addEventListener("click", () => leftPanel.classList.toggle("open"));
+document.getElementById("mobile-3d-toggle").addEventListener("click", () => {
+  rightPanel.classList.toggle("open");
+  overlayBg.classList.toggle("open");
+});
+overlayBg.addEventListener("click", () => { rightPanel.classList.remove("open"); overlayBg.classList.remove("open"); });
+
+/* =========================================================================
+   STATUS BAR
+   ========================================================================= */
+function updateStatusBar() {
+  document.getElementById("status-res").textContent = `${state.resolution}×${state.resolution}`;
+  document.getElementById("status-tool").textContent = state.tool[0].toUpperCase() + state.tool.slice(1);
+  document.getElementById("status-color").textContent = state.color;
+  document.getElementById("status-color-dot").style.background = state.color;
+  const layer = activeLayer();
+  document.getElementById("status-layer").textContent = layer ? layer.name : "—";
+}
+
+/* =========================================================================
+   THREE.JS 3D PREVIEW
+   Two render modes sharing one scene/camera/renderer:
+     - "plane": a lit PlaneGeometry textured with a live CanvasTexture.
+     - "voxel": an InstancedMesh cube per opaque pixel. Only the first
+       `activeVoxelCount` instances are rendered (THREE.InstancedMesh
+       respects `.count`), so hidden/transparent pixels cost nothing.
+   ========================================================================= */
+let previewMode = "plane";
+let three = null; // lazily populated if WebGL is available
+
+function initThreePreview() {
+  const canvas = document.getElementById("preview3d-canvas");
+  let renderer;
   try {
-    const loadedLayers = JSON.parse(layersStr);
-    const loadedSettings = settingsStr ? JSON.parse(settingsStr) : {};
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+  } catch (err) {
+    document.getElementById("webgl-fallback").style.display = "block";
+    canvas.style.display = "none";
+    console.error("WebGL unavailable:", err);
+    return;
+  }
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
-    // Восстанавливаем слои
-    layers = loadedLayers.map(l => ({
-      ...l,
-      data: l.data.length === GRID * GRID ? l.data : new Array(GRID * GRID).fill(null)
-    }));
-    activeLayerIndex = loadedSettings.activeLayerIndex || 0;
-    layers.forEach((l, i) => l.active = (i === activeLayerIndex));
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x05070a);
 
-    // Восстанавливаем настройки
-    if (loadedSettings.GRID) {
-      GRID = loadedSettings.GRID;
-      cell = STAGE_PX / GRID;
-      // Если размер холста изменился — пересоздаём данные слоёв под новый размер
-      layers = layers.map(l => ({
-        ...l,
-        data: new Array(GRID * GRID).fill(l.active ? null : undefined)
-      }));
-      // Простейшая попытка «растянуть» старые пиксели (можно улучшить)
-      const oldGrid = loadedSettings.GRID || 24;
-      if (oldGrid !== GRID) {
-        const ratio = GRID / oldGrid;
-        loadedLayers.forEach((oldLayer, li) => {
-          oldLayer.data.forEach((color, i) => {
-            if (!color) return;
-            const ox = i % oldGrid;
-            const oy = Math.floor(i / oldGrid);
-            const nx = Math.round(ox * ratio);
-            const ny = Math.round(oy * ratio);
-            if (inb(nx, ny)) {
-              layers[li].data[idx(nx, ny)] = color;
-            }
-          });
-        });
+  const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
+  camera.position.set(2.4, 2.2, 2.6);
+
+  const controls = new OrbitControls(camera, canvas);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.minDistance = 1.4;
+  controls.maxDistance = 8;
+  controls.target.set(0, 0.15, 0);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+  const dirLight = new THREE.DirectionalLight(0xffffff, 1.1);
+  dirLight.position.set(3, 5, 2);
+  dirLight.castShadow = true;
+  dirLight.shadow.mapSize.set(1024, 1024);
+  scene.add(dirLight);
+
+  const ground = new THREE.Mesh(
+    new THREE.PlaneGeometry(10, 10),
+    new THREE.MeshStandardMaterial({ color: 0x0b0e12, roughness: 1 })
+  );
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = -0.5;
+  ground.receiveShadow = true;
+  scene.add(ground);
+
+  // -- texture plane --
+  const exportCanvas = document.createElement("canvas");
+  exportCanvas.width = state.resolution;
+  exportCanvas.height = state.resolution;
+  const texture = new THREE.CanvasTexture(exportCanvas);
+  texture.magFilter = THREE.NearestFilter;
+  texture.minFilter = THREE.NearestFilter;
+  texture.colorSpace = THREE.SRGBColorSpace;
+
+  const planeMat = new THREE.MeshStandardMaterial({ map: texture, transparent: true, roughness: 0.75, metalness: 0.05 });
+  const planeMesh = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.6), planeMat);
+  planeMesh.castShadow = true;
+  planeMesh.receiveShadow = false;
+  scene.add(planeMesh);
+
+  // -- voxel mesh --
+  const MAX_VOXELS = 64 * 64;
+  const voxelGeo = new THREE.BoxGeometry(1, 1, 1);
+  const voxelMat = new THREE.MeshStandardMaterial({ roughness: 0.6, metalness: 0.05 });
+  const voxelMesh = new THREE.InstancedMesh(voxelGeo, voxelMat, MAX_VOXELS);
+  voxelMesh.castShadow = true;
+  voxelMesh.receiveShadow = true;
+  voxelMesh.count = 0;
+  voxelMesh.visible = false;
+  scene.add(voxelMesh);
+
+  planeMesh.visible = true;
+
+  const colorOrder = new Map(); // hex -> first-seen index, drives voxel height variety
+  const dummy = new THREE.Object3D();
+  const voxelColor = new THREE.Color();
+
+  function rebuildVoxels() {
+    compositeInto(exportCanvas.getContext("2d"), state.resolution);
+    const ctx = exportCanvas.getContext("2d");
+    const { data } = ctx.getImageData(0, 0, state.resolution, state.resolution);
+    const size = state.resolution;
+    const cell = 1.6 / size;
+    let count = 0;
+
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const i = (y * size + x) * 4;
+        const a = data[i + 3];
+        if (a < 16) continue;
+        const hex = rgbToHex(data[i], data[i + 1], data[i + 2]);
+        if (!colorOrder.has(hex)) colorOrder.set(hex, colorOrder.size);
+        const heightIndex = colorOrder.get(hex) % 6;
+        const height = 0.35 + heightIndex * 0.09;
+
+        const wx = (x - size / 2 + 0.5) * cell;
+        const wz = (y - size / 2 + 0.5) * cell;
+
+        dummy.position.set(wx, height / 2 - 0.5, wz);
+        dummy.scale.set(cell * 0.98, height, cell * 0.98);
+        dummy.rotation.set(0, 0, 0);
+        dummy.updateMatrix();
+        voxelMesh.setMatrixAt(count, dummy.matrix);
+        voxelColor.setRGB(data[i] / 255, data[i + 1] / 255, data[i + 2] / 255, THREE.SRGBColorSpace);
+        voxelMesh.setColorAt(count, voxelColor);
+        count++;
+        if (count >= MAX_VOXELS) break;
       }
+      if (count >= MAX_VOXELS) break;
     }
-    if (typeof loadedSettings.thickness !== 'undefined') thickness = loadedSettings.thickness;
-    if (loadedSettings.tool) tool = loadedSettings.tool;
-    if (loadedSettings.curColor) curColor = loadedSettings.curColor;
-    if (typeof loadedSettings.mirror !== 'undefined') mirror = loadedSettings.mirror;
-    if (typeof loadedSettings.showGrid !== 'undefined') showGrid = loadedSettings.showGrid;
-    if (typeof loadedSettings.pixelPerfect !== 'undefined') pixelPerfect = loadedSettings.pixelPerfect;
-
-    thicknessEl.value = thickness;
-    thicknessValEl.textContent = thickness;
-    setTool(tool);
-    refreshSwatches();
-    mirrorCheck.checked = mirror;
-    gridToggle.checked = showGrid;
-    pixelPerfectCheck.checked = pixelPerfect;
-    sizeSel.value = GRID;
-
-    applyZoom();
-    redraw();
-    renderLayersList();
-    updateStats();
-
-    alert('Проект загружен из браузера');
-  } catch (e) {
-    console.error(e);
-    alert('Ошибка при загрузке проекта');
+    voxelMesh.count = count;
+    voxelMesh.instanceMatrix.needsUpdate = true;
+    if (voxelMesh.instanceColor) voxelMesh.instanceColor.needsUpdate = true;
   }
-};
 
-clearBtn.onclick = () => {
-  if (confirm('Очистить весь холст?')) {
-    saveState();
-    const currentLayer = layers[activeLayerIndex];
-    currentLayer.data.fill(null);
-    redraw();
-    updateStats();
+  function updateTexturePlane() {
+    compositeInto(exportCanvas.getContext("2d"), state.resolution);
+    texture.needsUpdate = true;
   }
-};
 
-// Инициализация при загрузке
+  function setMode(mode) {
+    previewMode = mode;
+    planeMesh.visible = mode === "plane";
+    voxelMesh.visible = mode === "voxel";
+    if (mode === "voxel") rebuildVoxels();
+    else updateTexturePlane();
+    document.getElementById("mode-plane-btn").classList.toggle("active", mode === "plane");
+    document.getElementById("mode-voxel-btn").classList.toggle("active", mode === "voxel");
+  }
+
+  function onResize() {
+    const rect = canvas.getBoundingClientRect();
+    const s = Math.max(1, rect.width);
+    renderer.setSize(s, s, false);
+    camera.aspect = 1;
+    camera.updateProjectionMatrix();
+  }
+  window.addEventListener("resize", onResize);
+
+  /**
+   * Export the current voxelized pixel art as a binary glTF (.glb).
+   * Rebuilds voxel instance data first so the export always matches
+   * whatever is currently painted, regardless of which preview mode
+   * is on screen. Colors travel as an EXT_mesh_gpu_instancing "_COLOR_0"
+   * instance attribute, which GLTFExporter picks up automatically from
+   * InstancedMesh.instanceColor.
+   */
+  function exportVoxelGLTF() {
+    return new Promise((resolve, reject) => {
+      rebuildVoxels();
+      if (voxelMesh.count === 0) {
+        reject(new Error("Canvas is empty — nothing to export."));
+        return;
+      }
+      const exportGroup = new THREE.Group();
+      const clonedVoxels = voxelMesh.clone();
+      clonedVoxels.visible = true; // export regardless of which preview mode is on screen
+      exportGroup.add(clonedVoxels);
+      const exporter = new GLTFExporter();
+      exporter.parse(
+        exportGroup,
+        (result) => {
+          const blob = new Blob([result], { type: "model/gltf-binary" });
+          resolve(blob);
+        },
+        (err) => reject(err),
+        { binary: true, onlyVisible: true }
+      );
+    });
+  }
+
+  let rafPending = false;
+  function sync() {
+    if (rafPending) return;
+    rafPending = true;
+    requestAnimationFrame(() => {
+      rafPending = false;
+      if (previewMode === "voxel") rebuildVoxels();
+      else updateTexturePlane();
+    });
+  }
+
+  function animate() {
+    controls.update();
+    renderer.render(scene, camera);
+    requestAnimationFrame(animate);
+  }
+
+  onResize();
+  updateTexturePlane();
+  animate();
+
+  three = { setMode, sync, exportCanvas, exportVoxelGLTF };
+}
+
+function syncThreePreview() {
+  if (three) three.sync();
+}
+
+document.getElementById("mode-plane-btn").addEventListener("click", () => three && three.setMode("plane"));
+document.getElementById("mode-voxel-btn").addEventListener("click", () => three && three.setMode("voxel"));
+
+document.getElementById("export-gltf-btn").addEventListener("click", async () => {
+  if (!three) { alert("3D preview isn't available (WebGL missing), so there's nothing to export."); return; }
+  const btn = document.getElementById("export-gltf-btn");
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Exporting…";
+  try {
+    const blob = await three.exportVoxelGLTF();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "pixel_studio_voxel.glb";
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    btn.textContent = "✅ Saved";
+    setTimeout(() => { btn.textContent = original; }, 1400);
+  } catch (err) {
+    console.error("GLTF export failed:", err);
+    alert(err && err.message ? err.message : "GLTF export failed.");
+    btn.textContent = original;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+/* =========================================================================
+   EXPORT
+   ========================================================================= */
+function buildExportCanvas() {
+  const canvas = document.createElement("canvas");
+  canvas.width = state.resolution;
+  canvas.height = state.resolution;
+  compositeInto(canvas.getContext("2d"), state.resolution);
+  return canvas;
+}
+
+function buildItemTextureJson() {
+  return JSON.stringify({
+    resource_pack_name: "vanilla",
+    texture_name: "atlas.items",
+    texture_data: {
+      pixel_studio_item: { textures: "textures/items/pixel_studio_item" },
+    },
+  }, null, 2);
+}
+
+function buildManifestJson() {
+  return JSON.stringify({
+    format_version: 2,
+    header: {
+      name: "Pixel Studio Export",
+      description: "Generated by Pixel Studio",
+      uuid: crypto.randomUUID(),
+      version: [1, 0, 0],
+      min_engine_version: [1, 20, 0],
+    },
+    modules: [
+      {
+        type: "resources",
+        uuid: crypto.randomUUID(),
+        version: [1, 0, 0],
+      },
+    ],
+  }, null, 2);
+}
+
+document.getElementById("export-png-btn").addEventListener("click", () => {
+  const canvas = buildExportCanvas();
+  canvas.toBlob((blob) => {
+    if (!blob) { alert("PNG export failed."); return; }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "pixel_studio_texture.png";
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }, "image/png");
+});
+
+document.getElementById("copy-json-btn").addEventListener("click", async () => {
+  const json = buildItemTextureJson();
+  try {
+    await navigator.clipboard.writeText(json);
+    flashButton("copy-json-btn", "✅ Copied");
+  } catch (err) {
+    // fallback for browsers/contexts without clipboard permission
+    const ta = document.createElement("textarea");
+    ta.value = json;
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); flashButton("copy-json-btn", "✅ Copied"); }
+    catch { alert("Couldn't copy automatically — here's the JSON:\n\n" + json); }
+    ta.remove();
+  }
+});
+
+function flashButton(id, text) {
+  const btn = document.getElementById(id);
+  const original = btn.textContent;
+  btn.textContent = text;
+  setTimeout(() => { btn.textContent = original; }, 1400);
+}
+
+document.getElementById("export-zip-btn").addEventListener("click", async () => {
+  const btn = document.getElementById("export-zip-btn");
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Packing…";
+  try {
+    const { ZipWriter, BlobWriter, TextReader, BlobReader } = await import(
+      "https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.7.41/index.js"
+    );
+    const canvas = buildExportCanvas();
+    const pngBlob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+
+    const zipWriter = new ZipWriter(new BlobWriter("application/zip"));
+    await zipWriter.add("item_texture.json", new TextReader(buildItemTextureJson()));
+    await zipWriter.add("manifest.json", new TextReader(buildManifestJson()));
+    await zipWriter.add("textures/items/pixel_studio_item.png", new BlobReader(pngBlob));
+    const zipBlob = await zipWriter.close();
+
+    const url = URL.createObjectURL(zipBlob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "pixel-studio-export.zip";
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    console.error("ZIP export failed:", err);
+    alert("ZIP export needs an internet connection to load the zip library. Try 'Export PNG' and 'Copy JSON' separately instead.");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+});
+
+/* =========================================================================
+   INIT
+   ========================================================================= */
+function init() {
+  state.palette = [...DEFAULT_PALETTE];
+  resizeViewCanvas();
+  initLayers();
+  renderSwatches();
+  updateUndoRedoButtons();
+  updateStatusBar();
+  initThreePreview();
+  redrawView();
+}
+
+window.addEventListener("resize", resizeViewCanvas);
 init();
 </script>
 </body>
 </html>
-```
